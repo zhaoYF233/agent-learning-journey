@@ -1,17 +1,44 @@
 from openai import OpenAI
+import json
 
 # 👇 把引号里的内容替换成你自己的 API Key
 client = OpenAI(
     api_key="sk-ff5dbe36db204dd38803f175ca0a02fa",  # 粘贴你复制的 Key
     base_url="https://api.deepseek.com"
 )
+# --- 👇 新增：工具定义（告诉模型你有什么工具）---
+tools = [
+    {
+        "type":"function",
+        "function":{
+            "name":"get_weather",
+            "description":"查询指定的城市的天气情况",
+            "parameters":{
+                "type":"object",
+                "properties":{
+                    "city":{
+                        "type":"string",
+                        "description":"城市名称，例如：北京、上海"
+                    }
+                },
+                "required":["city"]
+            }
+        }
+    }
+]
 
 class ChatAgent:
     def __init__(self):
         self.memory = []
 
-    def remember(self, role, content):
-        self.memory.append({"role": role, "content": content})
+    def remember(self, role, content,tool_call_id=None):
+        """
+        记忆存储（升级版：支持 tool 角色）。
+        """
+        msg = {"role":role,"content":content}
+        if tool_call_id:
+            msg["tool_call_id"]=tool_call_id
+        self.memory.append(msg)
 
     def chat(self, user_input):
         self.remember("user", user_input)
@@ -19,12 +46,56 @@ class ChatAgent:
         response = client.chat.completions.create(  #内部是如何打包数据、发送网络请求的？——暂时不用管。
             model="deepseek-chat",
             messages=self.memory,
+            tools=tools,         # 👈 新增
+            tool_choice="auto",  # 👈 新增：让模型自己决定是否用工具
             stream=False
         )
 
+        message = response.choices[0].message
+        """
         reply = response.choices[0].message.content  #记住这是从返回包里把 AI 的话“掏出来”的固定写法。
         self.remember("assistant", reply)
         return reply
+        """
+        # --- 👇 新增：判断模型是否想调用工具 ---
+        if message.tool_calls:
+            # 取出第一个工具调用请求
+            tool_call =message.tool_calls[0]
+            func_name = tool_call.function.name
+            args = json.loads(tool_call.function.arguments)
+
+            # 根据函数名调用对应的工具
+            if func_name=="get_weather":
+                from tools import get_weather  # 👈 从 tools.py 导入函数
+                city = args.get("city")
+                tool_result = get_weather(city)
+
+                # 把模型的工具调用请求存入记忆（role = "assistant"，但包含 tool_calls）
+                self.memory.append(message)
+
+                # 把工具执行结果存入记忆（role = "tool"）
+                self.remember("tool",tool_result,tool_call_id=tool_call.id)
+
+                # 第二次调用 API，让模型基于工具结果生成最终回答
+                second_response = client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=self.memory,
+                    stream=False
+                )
+                reply = second_response.choices[0].message.content
+            else:
+                reply = "抱歉，我暂时不支持这个工具。"
+        else:
+            # 正常文本回复
+            reply = message.content
+
+        # 3. 记住 AI 的最终回复
+        self.remember("assistant", reply)
+        return reply
+
+
+
+
 
 if __name__ == "__main__":
     agent = ChatAgent()
