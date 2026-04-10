@@ -32,11 +32,12 @@ class ChatAgent:
         self.memory = []
 
     def remember(self, role, content,tool_call_id=None):
+        #三个参数，若只有两个参数，最后一个默认为None
         """
         记忆存储（升级版：支持 tool 角色）。
         """
         msg = {"role":role,"content":content}
-        if tool_call_id:
+        if tool_call_id:   #第一次调用 self.remember 直接跳过
             msg["tool_call_id"]=tool_call_id
         self.memory.append(msg)
 
@@ -46,22 +47,22 @@ class ChatAgent:
         response = client.chat.completions.create(  #内部是如何打包数据、发送网络请求的？——暂时不用管。
             model="deepseek-chat",
             messages=self.memory,
-            tools=tools,         # 👈 新增
+            tools=tools,         # 👈 新增   一开始的10行的那个架构
             tool_choice="auto",  # 👈 新增：让模型自己决定是否用工具
             stream=False
         )
 
-        message = response.choices[0].message
+        message = response.choices[0].message  # 固定搭配
         """
         reply = response.choices[0].message.content  #记住这是从返回包里把 AI 的话“掏出来”的固定写法。
         self.remember("assistant", reply)
         return reply
         """
         # --- 👇 新增：判断模型是否想调用工具 ---
-        if message.tool_calls:
+        if message.tool_calls:  #-------------tool_calls是 DeepSeek API 返回的 JSON 数据中自带的一个字段
             # 取出第一个工具调用请求
             tool_call =message.tool_calls[0]
-            func_name = tool_call.function.name
+            func_name = tool_call.function.name  # tool_call和10行的那个不一样
             args = json.loads(tool_call.function.arguments)
 
             # 根据函数名调用对应的工具
@@ -71,10 +72,10 @@ class ChatAgent:
                 tool_result = get_weather(city)
 
                 # 把模型的工具调用请求存入记忆（role = "assistant"，但包含 tool_calls）
-                self.memory.append(message)
+                self.memory.append(message)#------第二个存入memory列表的东西
 
                 # 把工具执行结果存入记忆（role = "tool"）
-                self.remember("tool",tool_result,tool_call_id=tool_call.id)
+                self.remember("tool",tool_result,tool_call_id=tool_call.id)#------第三个个存入memory列表的东西
 
                 # 第二次调用 API，让模型基于工具结果生成最终回答
                 second_response = client.chat.completions.create(
@@ -90,7 +91,7 @@ class ChatAgent:
             reply = message.content
 
         # 3. 记住 AI 的最终回复
-        self.remember("assistant", reply)
+        self.remember("assistant", reply)  ##------第四个个存入memory列表的东西
         return reply
 
 
